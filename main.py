@@ -5,7 +5,6 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-
 try:
     from google import genai
     from google.genai import errors as core_exceptions
@@ -169,7 +168,7 @@ def fetch_live_tournament_data(api_token):
                         if pair not in stage_matchups[current_stage_mapped]:
                             stage_matchups[current_stage_mapped].append(pair)
                 
-                if status in ["FINISHED", "IN_PLAY", "PAUSED"]:
+                if status in ["FINISHED", "IN_PLAY", "PAUSED", "LIVE"]:
                     score_data = match.get("score", {})
                     full_time = score_data.get("fullTime", {})
                     home_goals = full_time.get("home", 0) or 0
@@ -182,7 +181,7 @@ def fetch_live_tournament_data(api_token):
                         if home_team not in ["TBD", "TBC"]: stats[home_team]["Match Scores"][current_stage_mapped] = home_goals
                         if away_team not in ["TBD", "TBC"]: stats[away_team]["Match Scores"][current_stage_mapped] = away_goals
          
-                        if status in ["IN_PLAY", "PAUSED"]:
+                        if status in ["IN_PLAY", "PAUSED", "LIVE"]:
                             if home_team not in ["TBD", "TBC"]:
                                 stats[home_team].setdefault("Live Stages", []).append(current_stage_mapped)
                             if away_team not in ["TBD", "TBC"]:
@@ -613,13 +612,23 @@ def main():
                         if summary:
                             st.write(summary)
              
-                    elif m["status"] in ["IN_PLAY", "PAUSED"]:
+                    elif m["status"] in ["IN_PLAY", "PAUSED", "LIVE"]:
                         score_str = f"{m['score']['fullTime'].get('home', 0)} - {m['score']['fullTime'].get('away', 0)}"
                         
+                        # Calculate live win probabilities based on tournament historical goals
+                        h_goals = df_teams[df_teams["Team"] == h_team]["Goals Scored"].sum() if not df_teams.empty else 0
+                        a_goals = df_teams[df_teams["Team"] == a_team]["Goals Scored"].sum() if not df_teams.empty else 0
+                        total_w = h_goals + a_goals + 2
+    
+                        h_prob = (h_goals + 1) / total_w
+                        a_prob = (a_goals + 1) / total_w
+                        
                         st.markdown(
-                            f"🔴 **LIVE NOW** | <img src='{h_flag}' width='20' style='vertical-align: middle; margin-right: 6px;'>**{h_player}** &nbsp; `{score_str}` &nbsp; **{a_player}**<img src='{a_flag}' width='20' style='vertical-align: middle; margin-left: 6px;'>", 
+                            f"🔴 **LIVE** | <img src='{h_flag}' width='20' style='vertical-align: middle; margin-right: 6px;'>**{h_player}** &nbsp; "
+                            f"`{score_str}` &nbsp; **{a_player}**<img src='{a_flag}' width='20' style='vertical-align: middle; margin-left: 6px;'>", 
                             unsafe_allow_html=True
                         )
+                        st.caption(f"📊 Live Prediction: {h_player} {h_prob:.0%} chance | {a_player} {a_prob:.0%} chance")
                         
                     else:
                         h_goals = df_teams[df_teams["Team"] == h_team]["Goals Scored"].sum() if not df_teams.empty else 0
