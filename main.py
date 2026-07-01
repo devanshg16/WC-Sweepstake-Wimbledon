@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 try:
     from google import genai
-    from google.api_core import exceptions as core_exceptions
+    from google.genai import errors as core_exceptions
 except ImportError:
     genai = None
     core_exceptions = None
