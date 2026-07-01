@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
+from streamlit_autorefresh import st_autorefresh
+
 
 try:
     from google import genai
@@ -240,6 +242,9 @@ def database_load_pipeline():
     return df_p, df_t, stage_matchups, matches_list
 
 def main():
+    
+    st_autorefresh(interval=30000, key="datarefresh")
+
     secrets_ok, error_msg = check_secrets()
     if not secrets_ok:
         st.error("🚨 Missing Configuration")

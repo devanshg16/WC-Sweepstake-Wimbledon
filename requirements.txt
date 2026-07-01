@@ -4,3 +4,4 @@ st-gsheets-connection
 google-genai
 requests
 datetime
+streamlit_autorefresh
