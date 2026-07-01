@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
-import time
 
 try:
     from google import genai
