@@ -22,7 +22,9 @@ st.set_page_config(
 STAGE_ORDER = ["Group Stage", "Round of 32", "Round of 16", "Quarter-Finals", "Semi-Finals", "Finals", "Champion"]
 
 API_STAGE_MAP = {
+    "ROUND_OF_32": "Round of 32",
     "LAST_32": "Round of 32",
+    "ROUND_OF_16": "Round of 16",
     "LAST_16": "Round of 16",
     "QUARTER_FINALS": "Quarter-Finals",
     "SEMI_FINALS": "Semi-Finals",
