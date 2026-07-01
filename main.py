@@ -313,8 +313,8 @@ def main():
                 "Flag", "Participant Name", "Stage", "Goals Scored"
             ]].rename(columns={
                 "Participant Name": "Player",
-                "Stage": "Current Progress Stage",
-                "Goals Scored": "Total Goals Scored"
+                "Stage": "Stage",
+                "Goals Scored": "Tot. Goals"
             })
             
             df_display = df_display.sort_values(
