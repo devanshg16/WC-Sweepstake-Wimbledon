@@ -4,13 +4,7 @@ import requests
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
-
-try:
-    from google import genai
-    from google.genai import errors as core_exceptions
-except ImportError:
-    genai = None
-    core_exceptions = None
+from groq import Groq
 
 st.set_page_config(
     page_title="Tournament Sweepstake Hub",
@@ -23,6 +17,7 @@ st.set_page_config(
 STAGE_ORDER = ["Group Stage", "Round of 32", "Round of 16", "Quarter-Finals", "Semi-Finals", "Finals", "Champion"]
 
 API_STAGE_MAP = {
+    "GROUP_STAGE": "Group Stage",
     "ROUND_OF_32": "Round of 32",
     "LAST_32": "Round of 32",
     "ROUND_OF_16": "Round of 16",
@@ -38,10 +33,9 @@ def check_secrets():
         "football_api": ["api_token"],
         "passwords": ["admin_password"],
         "connections": ["gsheets"],
-        "gemini_api": ["api_key"]
+        "groq_api": ["groq_api_key"]  #  Updated to match your actual API calls
     }
-    if not genai:
-        return False, "The 'google-genai' package is not installed.\nRun: pip install google-genai"
+    
     for section, keys in required.items():
         if section not in st.secrets:
             return False, f"Missing section: [{section}] in secrets.toml"
@@ -51,18 +45,28 @@ def check_secrets():
     return True, ""
 
 # -------------------------------------------------------------
-# AI CORE UTILITIES (GEMINI 2.5)
+# AI CORE UTILITIES (GROQ)
 # -------------------------------------------------------------
+
 @st.cache_data(persist="disk", show_spinner=False)
 def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
     """Generates post-match summary exactly ONCE per unique match data signature."""
-    api_key = st.secrets.get("gemini_api", {}).get("api_key")
-    if not api_key or not genai:
+    groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
+    if not groq_api_key or not Groq:
         return "AI integration offline."
         
     try:
-        client = genai.Client(api_key=api_key)
-        prompt = (
+        client = Groq(api_key=groq_api_key)
+
+        # A clear system instruction setting boundaries for clean, lighthearted wit
+        system_instruction = (
+            "You are a charismatic, playful, and incredibly witty football commentator. "
+            "Your tone should be clever, clever, and highly creative, but always remaining "
+            "positive and fun. Strictly avoid mean-spirited roasts, dark humor, or cynicism."
+        )
+
+        # Your structured sports variables
+        user_prompt = (
             f"Context: Football tournament match result.\n"
             f"Participants: {h_player} vs {a_player}.\n"
             f"Final Score: {score_str}.\n"
@@ -70,12 +74,20 @@ def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
             f"Instruction: Generate a one-sentence fun, dramatic, and witty post-match commentary. "
             f"Do not include any emojis. Do not format with markdown bolding or asterisks. Be punchy."
         )
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+
+        # Call the Grok API
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            # Ultra-fast model covered by free tier credits
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt}
+            ]
         )
-        if response and response.text:
-            return response.text.strip().replace('"', '').replace('*', '')
+
+        if response and response.choices:
+            ai_text = response.choices[0].message.content
+            return ai_text.strip().replace('"', '').replace('*', '')
         return "The match result left the AI speechless!"
     except Exception:
         return "What an incredible finish to this matchup!"
@@ -83,13 +95,18 @@ def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
 @st.cache_data(persist="disk", show_spinner=False)
 def get_gemini_preview(match_id, h_player, a_player, h_prob, a_prob):
     """Generates upcoming match preview narrative exactly ONCE per match ID."""
-    api_key = st.secrets.get("gemini_api", {}).get("api_key")
-    if not api_key or not genai:
+    groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
+    if not groq_api_key or not Groq:
         return None
         
     try:
-        client = genai.Client(api_key=api_key)
-        prompt = (
+        client = Groq(api_key=groq_api_key)
+        system_instruction = (
+            "You are a charismatic, playful, and incredibly witty football commentator. "
+            "Your tone should be clever, clever, and highly creative, but always remaining "
+            "positive and fun. Strictly avoid mean-spirited roasts, dark humor, or cynicism."
+        )
+        user_prompt = (
             f"Context: Upcoming tournament sweepstake football match.\n"
             f"Matchup: {h_player} vs {a_player}.\n"
             f"Calculated Win Probabilities: {h_player} has a {h_prob:.0%} chance, while {a_player} has a {a_prob:.0%} chance.\n"
@@ -97,27 +114,36 @@ def get_gemini_preview(match_id, h_player, a_player, h_prob, a_prob):
             f"Use predictions, but do not include percentages in response."
             f"No emojis. No asterisks. The response should be funny."
         )
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+        # Call the Grok API
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            # Ultra-fast model covered by free tier credits
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt}
+            ]
         )
-        if response and response.text:
-            return response.text.strip().replace('"', '').replace('*', '')
+        if response and response.choices:
+            ai_text = response.choices[0].message.content
+            return ai_text.strip().replace('"', '').replace('*', '')
     except Exception:
         return None
 
 # -------------------------------------------------------------
 # DYNAMIC FOOTBALL API DATA INGESTION ENGINE
 # -------------------------------------------------------------
+
 @st.cache_data(ttl=30)
 def fetch_live_tournament_data(api_token):
     stats = {}
     stage_matchups = {stage: [] for stage in STAGE_ORDER if stage != "Champion"}
     all_matches = []
+    golden_boot = {}
+    biggest_wins = []
     
     if not api_token or str(api_token).strip() == "":
         st.sidebar.error("⚠️ API Token is missing. Please check your secrets configuration.")
-        return stats, stage_matchups, all_matches
+        return stats, stage_matchups, all_matches, {}, []  #  Fixed
 
     try:
         headers = {"X-Auth-Token": str(api_token).strip()}
@@ -186,34 +212,79 @@ def fetch_live_tournament_data(api_token):
                                 stats[home_team].setdefault("Live Stages", []).append(current_stage_mapped)
                             if away_team not in ["TBD", "TBC"]:
                                 stats[away_team].setdefault("Live Stages", []).append(current_stage_mapped)
+
+                # Track Golden Boot scorers
+                # Note: Bulk matches API often omits the 'goals' array in standard tiers.
+                # We capture what we can here, but primarily rely on the /scorers endpoint below.
+                match_goals = match.get("goals") or match.get("score", {}).get("goals", [])
+                for goal in match_goals:
+                    s_name = goal.get("scorer", {}).get("name")
+                    g_team = (goal.get("team", {}).get("name") or "Unknown")
+                    if g_team == "United States": g_team = "USA"
+                    if s_name:
+                        if s_name not in golden_boot:
+                            golden_boot[s_name] = {"Scorer": s_name, "Team": g_team, "Goals": 0}
+                        golden_boot[s_name]["Goals"] += 1
                 
-                if status == "FINISHED" and current_stage_mapped and home_team not in ["TBD", "TBC"] and away_team not in ["TBD", "TBC"]:
+                if status == "FINISHED" and (current_stage_mapped or stage == "GROUP_STAGE") and home_team not in ["TBD", "TBC"] and away_team not in ["TBD", "TBC"]:
+                    # Track Biggest Win (Margin and Winner's Goals)
+                    score_data = match.get("score", {})
+                    ft = score_data.get("fullTime", {})
+                    h_g = ft.get("home", 0) or 0
+                    a_g = ft.get("away", 0) or 0
+                    margin = abs(h_g - a_g)
+                    if margin > 0:
+                        biggest_wins.append({
+                            "Match": f"{home_team} vs {away_team}",
+                            "Score": f"{h_g} - {a_g}",
+                            "Margin": margin,
+                            "Goals": max(h_g, a_g),
+                            "Winner": home_team if h_g > a_g else away_team
+                        })
+
                     winner = match.get("score", {}).get("winner")
                     
-                    next_stage = current_stage_mapped
-                    if current_stage_mapped in STAGE_ORDER:
-                        curr_idx = STAGE_ORDER.index(current_stage_mapped)
-                        if curr_idx + 1 < len(STAGE_ORDER):
-                            next_stage = STAGE_ORDER[curr_idx + 1]
+                    # Progress tracking logic (only for knockout stages)
+                    if current_stage_mapped and current_stage_mapped != "Group Stage":
+                        next_stage = current_stage_mapped
+                        if current_stage_mapped in STAGE_ORDER:
+                            curr_idx = STAGE_ORDER.index(current_stage_mapped)
+                            if curr_idx + 1 < len(STAGE_ORDER):
+                                next_stage = STAGE_ORDER[curr_idx + 1]
 
-                    if winner == "HOME_TEAM":
-                        stats[away_team]["Status"] = "Knocked Out"
-                        stats[away_team]["Stage"] = current_stage_mapped
-                        stats[home_team]["Stage"] = next_stage
-                    elif winner == "AWAY_TEAM":
-                        stats[home_team]["Status"] = "Knocked Out"
-                        stats[home_team]["Stage"] = current_stage_mapped
-                        stats[away_team]["Stage"] = next_stage
-            
-                    if stage == "FINAL" and winner:
-                        champ = home_team if winner == "HOME_TEAM" else away_team
-                        stats[champ]["Stage"] = "Champion"
-                        stats[champ]["Status"] = "Winner"
-                        
+                        if winner == "HOME_TEAM":
+                            stats[away_team]["Status"] = "Knocked Out"
+                            stats[away_team]["Stage"] = current_stage_mapped
+                            stats[home_team]["Stage"] = next_stage
+                        elif winner == "AWAY_TEAM":
+                            stats[home_team]["Status"] = "Knocked Out"
+                            stats[home_team]["Stage"] = current_stage_mapped
+                            stats[away_team]["Stage"] = next_stage
+                
+                        if stage == "FINAL" and winner:
+                            champ = home_team if winner == "HOME_TEAM" else away_team
+                            stats[champ]["Stage"] = "Champion"
+                            stats[champ]["Status"] = "Winner"
+
+        # FALLBACK/PRIMARY: Fetch dedicated scorers endpoint to guarantee Golden Boot data
+        scorers_url = "https://api.football-data.org/v4/competitions/WC/scorers"
+        scorers_res = requests.get(scorers_url, headers=headers, timeout=10)
+        if scorers_res.status_code == 200:
+            scorers_data = scorers_res.json().get("scorers", [])
+            for entry in scorers_data:
+                s_name = entry.get("player", {}).get("name")
+                g_team = entry.get("team", {}).get("name") or "Unknown"
+                if g_team == "United States": g_team = "USA"
+                g_count = entry.get("goals", 0)
+                
+                # Update or add to our dictionary
+                if s_name:
+                    golden_boot[s_name] = {"Scorer": s_name, "Team": g_team, "Goals": g_count}
+
     except Exception as e:
         st.sidebar.error(f"API Connection Issue: {e}")
        
-    return stats, stage_matchups, all_matches
+    return stats, stage_matchups, all_matches, golden_boot, biggest_wins
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -232,16 +303,16 @@ def database_load_pipeline():
         df_p = df_p.dropna(subset=["Participant Name"])
         
     api_token = st.secrets.get("football_api", {}).get("api_token", "")
-    live_stats, stage_matchups, matches_list = fetch_live_tournament_data(api_token)
+    live_stats, stage_matchups, matches_list, golden_boot, biggest_wins = fetch_live_tournament_data(api_token)
     df_t = pd.DataFrame(list(live_stats.values()))
     
     if df_t.empty:
         df_t = pd.DataFrame(columns=["Team", "Flag", "Won", "Lost", "Points", "Goals Scored", "Stage", "Status"])
         
-    return df_p, df_t, stage_matchups, matches_list
+    return df_p, df_t, stage_matchups, matches_list, golden_boot, biggest_wins
 
 def main():
-    
+
     st_autorefresh(interval=30000, key="datarefresh")
 
     secrets_ok, error_msg = check_secrets()
@@ -250,7 +321,7 @@ def main():
         st.info(f"Details: {error_msg}")
         st.stop()
 
-    df_participants, df_teams, global_matchups, raw_matches = database_load_pipeline()
+    df_participants, df_teams, global_matchups, raw_matches, golden_boot, biggest_wins = database_load_pipeline()
 
     st.markdown("""
         <style>
@@ -290,8 +361,6 @@ def main():
         st.write("---")
         app_view = st.radio("Switch Dashboard View", ["📊 Public Fan Dashboard", "🔐 Admin Control Panel"])
 
-    gemini_key = st.secrets.get("gemini_api", {}).get("api_key")
-
     if app_view == "📊 Public Fan Dashboard":
         st.title("📊 The Wimbledon World Cup")
         st.caption("Updated automatically from official game knockout data feeds.")
@@ -327,8 +396,109 @@ def main():
                 df_display, 
                 use_container_width=True, 
                 height=450,
-                column_config={"Flag": st.column_config.ImageColumn("🏳️", width="small")}
+                column_config={"Flag": st.column_config.ImageColumn("🏳️", width="small")},
+                hide_index=True
             )
+            
+            st.divider()
+            col_a, col_b = st.columns(2)
+            
+            # Add this right before the Golden Boot section
+            df_boot = pd.DataFrame(list(golden_boot.values())) if golden_boot else pd.DataFrame(columns=["Scorer", "Team", "Goals"])
+            df_wins = pd.DataFrame(biggest_wins) if biggest_wins else pd.DataFrame(columns=["Winner", "Match", "Score"])
+
+
+            with col_a:
+                st.subheader("⚽ Golden Boot")
+                # Map the sweepstake owner to the scorer's team
+                df_boot["Owner"] = df_boot["Team"].apply(lambda x: team_to_player.get(str(x).strip().upper(), ""))
+                st.dataframe(df_boot[["Scorer", "Team", "Owner", "Goals"]].head(10), use_container_width=True, hide_index=True)
+                    
+            with col_b:
+                st.subheader("🔥 Biggest Win")
+                df_wins["Owner"] = df_wins["Winner"].apply(lambda x: team_to_player.get(str(x).strip().upper(), ""))
+                st.dataframe(
+                    df_wins[["Winner", "Match", "Score", "Owner"]].head(5), 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={"Owner": "Sweepstake Owner"}
+                )
+
+            # --- START OF TOURNAMENT MILESTONES SECTION ---
+            st.divider()
+            st.subheader("🏆 Tournament Milestone Bounties")
+            st.caption("Special sweepstake milestones achieved during the tournament (determined chronologically by non-simultaneous match order).")
+
+            # Custom card rendering utility supporting a white theme and image-based flag graphics
+            def render_milestone_card(title, team_name, metric_detail):
+                team_key = str(team_name).strip().upper()
+                entrant = team_to_player.get(team_key, "Unassigned")
+                
+                # Dynamic fallback if a crest image cannot be loaded
+                flag_html = "🏳️" 
+                
+                # Extract the high-res crest URL from the live dataframe to circumvent OS emoji rendering limitations
+                if not df_teams.empty:
+                    flag_match = df_teams[df_teams["Team"].str.upper() == team_key]
+                    if not flag_match.empty and "Flag" in flag_match.columns:
+                        flag_url = flag_match.iloc[0]["Flag"]
+                        if flag_url:
+                            flag_html = f"<img src='{flag_url}' width='26' style='vertical-align: middle; margin-right: 8px; border: 1px solid #e2e8f0; border-radius: 3px; flex-shrink: 0;'>"
+
+                st.markdown(
+                    f"""
+                    <div style="background-color: #ffffff; padding: 16px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid #38bdf8; margin-bottom: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                        <h5 style="margin: 0 0 6px 0; color: #475569; font-size: 0.95rem; font-weight: 600; letter-spacing: -0.01em;">{title}</h5>
+                        <p style="margin: 0; font-size: 1.1rem; font-weight: 700; color: #0f172a; display: flex; align-items: center; flex-wrap: nowrap;">
+                            {flag_html}
+                            <span style="margin-right: 6px;">{team_name}</span> 
+                            <span style="color: #64748b; font-weight: 400; margin: 0 4px;">—</span> 
+                            <span style="color: #0284c7; margin-left: 2px;">{entrant}</span>
+                        </p>
+                        <small style="color: #64748b; font-size: 0.85rem; display: block; margin-top: 6px; line-height: 1.3;">{metric_detail}</small>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            # Establish responsive 2-column layout grids
+            col_m1, col_m2 = st.columns(2)
+
+            with col_m1:
+                render_milestone_card(
+                    title="🎯 First Goal from a Penalty",
+                    team_name="Switzerland",
+                    metric_detail="Successfully converted against Qatar."
+                )
+                
+                render_milestone_card(
+                    title="🤦‍♂️ First Own Goal",
+                    team_name="Paraguay",
+                    metric_detail="Deflected into their own net against USA."
+                )
+
+            with col_m2:
+                render_milestone_card(
+                    title="🟥 First Red Card",
+                    team_name="Saudi Arabia",
+                    metric_detail="Sent off during the tournament opener sequence."
+                )
+                
+                render_milestone_card(
+                    title="📉 Worst Team (Exited in Group Stage)",
+                    team_name="Iraq",
+                    metric_detail="Eliminated with 0 Points and a -11 Goal Difference."
+                )
+            # --- END OF TOURNAMENT MILESTONES SECTION ---
+
+            st.divider()
+            st.subheader("🚩 Most Corners")
+            st.info("Corner kick statistics are not provided by the current tournament data provider (football-data.org).")
+
+            st.space()
+            st.space()
+            st.space()
+            st.caption("Created By Devansh Gupta using Gemini")
                 
         with tab_bracket:
             st.subheader("Tournament Knockout Progression")
@@ -339,10 +509,10 @@ def main():
             
             stage_geometry = {
                 "Round of 32":      {"start_pads": 0, "mid_pads": 0,  "total_slots": 16},
-                "Round of 16":      {"start_pads": 1, "mid_pads": 2.25,  "total_slots": 8},
-                "Quarter-Finals":   {"start_pads": 3.6, "mid_pads": 7.35,  "total_slots": 4},
-                "Semi-Finals":      {"start_pads": 8.5, "mid_pads": 17.5, "total_slots": 2},
-                "Finals":           {"start_pads": 18.5, "mid_pads": 0, "total_slots": 1}
+                "Round of 16":      {"start_pads": 1.05, "mid_pads": 2.48,  "total_slots": 8},
+                "Quarter-Finals":   {"start_pads": 3.6, "mid_pads": 7.8,  "total_slots": 4},
+                "Semi-Finals":      {"start_pads": 8.95, "mid_pads": 18.5, "total_slots": 2},
+                "Finals":           {"start_pads": 20.0, "mid_pads": 0, "total_slots": 1}
             }
        
             def render_team_markup(team_name, current_stage_title, opponent_name=None):
@@ -517,6 +687,11 @@ def main():
                             mid_height_px = geom["mid_pads"] * 54
                             st.html(f"<div style='height: {mid_height_px}px;'></div>")
 
+            st.space()
+            st.space()
+            st.space()
+            st.caption("Created By Devansh Gupta using Gemini")
+
         with tab_feed:
             # --- BST Night Logic Processing Block (4PM to 6AM Window) ---
             now_utc = datetime.utcnow()
@@ -649,6 +824,10 @@ def main():
                             preview = get_gemini_preview(m.get("id", 0), h_player, a_player, h_prob, a_prob)
                         if preview:
                              st.write(preview)
+            st.space()
+            st.space()
+            st.space()
+            st.caption("Created By Devansh Gupta using Gemini")
 
     # -------------------------------------------------------------
     # PANEL 2: PASSWORD PROTECTED ADMIN PANEL

@@ -1,7 +1,7 @@
 streamlit>=1.28.0
 pandas
 st-gsheets-connection
-google-genai
 requests
 datetime
 streamlit_autorefresh
+groq
