@@ -480,7 +480,7 @@ def main():
             with col_m2:
                 render_milestone_card(
                     title="🟥 First Red Card",
-                    team_name="Saudi Arabia",
+                    team_name="South Africa",
                     metric_detail="Sent off during the tournament opener sequence."
                 )
                 
