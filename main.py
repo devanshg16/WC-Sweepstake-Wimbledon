@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 from groq import Groq
 
+# Set page config MUST be the very first Streamlit command
 st.set_page_config(
     page_title="Tournament Sweepstake Hub",
     page_icon="🏆",
@@ -13,7 +14,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Core progressive knockout staging tracking array
+# -------------------------------------------------------------
+# GLOBAL CONSTANTS & UTILITIES
+# -------------------------------------------------------------
+
 STAGE_ORDER = ["Group Stage", "Round of 32", "Round of 16", "Quarter-Finals", "Semi-Finals", "Finals", "Champion"]
 
 API_STAGE_MAP = {
@@ -27,13 +31,33 @@ API_STAGE_MAP = {
     "FINAL": "Finals"
 }
 
+def shorten_name(full_name_str):
+    """
+    Converts a full name like 'James O'Doherty' into 'James O' 
+    and handles double-barrelled or regular surnames safely.
+    """
+    if not full_name_str or str(full_name_str).upper() in ["NAN", "NONE"]:
+        return ""
+    
+    parts = str(full_name_str).strip().split()
+    if not parts:
+        return ""
+    
+    first_name = parts[0]
+    
+    if len(parts) > 1:
+        surname_part = parts[1]
+        if surname_part:
+            return f"{first_name} {surname_part[0].upper()}"
+            
+    return first_name
+
 def check_secrets():
-    """Verify all required secrets are present."""
     required = {
         "football_api": ["api_token"],
         "passwords": ["admin_password"],
         "connections": ["gsheets"],
-        "groq_api": ["groq_api_key"]  #  Updated to match your actual API calls
+        "groq_api": ["groq_api_key"]
     }
     
     for section, keys in required.items():
@@ -48,24 +72,19 @@ def check_secrets():
 # AI CORE UTILITIES (GROQ)
 # -------------------------------------------------------------
 
-@st.cache_data(ttl=1800, persist="disk", show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
-    """Generates post-match summary exactly ONCE per unique match data signature."""
     groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
     if not groq_api_key or not Groq:
         return "AI integration offline."
         
     try:
         client = Groq(api_key=groq_api_key)
-
-        # A clear system instruction setting boundaries for clean, lighthearted wit
         system_instruction = (
             "You are a charismatic, playful, and incredibly witty football commentator. "
             "Your tone should be clever, clever, and highly creative, but always remaining "
             "positive and fun. Strictly avoid mean-spirited roasts, dark humor, or cynicism."
         )
-
-        # Your structured sports variables
         user_prompt = (
             f"Context: Football tournament match result.\n"
             f"Participants: {h_player} vs {a_player}.\n"
@@ -74,17 +93,13 @@ def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
             f"Instruction: Generate a one-sentence fun, dramatic, and witty post-match commentary. "
             f"Do not include any emojis. Do not format with markdown bolding or asterisks. Be punchy."
         )
-
-        # Call the Grok API
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            # Ultra-fast model covered by free tier credits
             messages=[
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": user_prompt}
             ]
         )
-
         if response and response.choices:
             ai_text = response.choices[0].message.content
             return ai_text.strip().replace('"', '').replace('*', '')
@@ -92,9 +107,8 @@ def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
     except Exception:
         return "What an incredible finish to this matchup!"
 
-@st.cache_data(ttl=1800, persist="disk", show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_gemini_preview(match_id, h_player, a_player, h_prob, a_prob):
-    """Generates upcoming match preview narrative exactly ONCE per match ID."""
     groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
     if not groq_api_key or not Groq:
         return None
@@ -114,10 +128,8 @@ def get_gemini_preview(match_id, h_player, a_player, h_prob, a_prob):
             f"Use predictions, but do not include percentages in response."
             f"No emojis. No asterisks. The response should be funny."
         )
-        # Call the Grok API
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            # Ultra-fast model covered by free tier credits
             messages=[
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": user_prompt}
@@ -143,7 +155,7 @@ def fetch_live_tournament_data(api_token):
     
     if not api_token or str(api_token).strip() == "":
         st.sidebar.error("⚠️ API Token is missing. Please check your secrets configuration.")
-        return stats, stage_matchups, all_matches, {}, []  #  Fixed
+        return stats, stage_matchups, all_matches, {}, []
 
     try:
         headers = {"X-Auth-Token": str(api_token).strip()}
@@ -213,9 +225,6 @@ def fetch_live_tournament_data(api_token):
                             if away_team not in ["TBD", "TBC"]:
                                 stats[away_team].setdefault("Live Stages", []).append(current_stage_mapped)
 
-                # Track Golden Boot scorers
-                # Note: Bulk matches API often omits the 'goals' array in standard tiers.
-                # We capture what we can here, but primarily rely on the /scorers endpoint below.
                 match_goals = match.get("goals") or match.get("score", {}).get("goals", [])
                 for goal in match_goals:
                     s_name = goal.get("scorer", {}).get("name")
@@ -227,7 +236,6 @@ def fetch_live_tournament_data(api_token):
                         golden_boot[s_name]["Goals"] += 1
                 
                 if status == "FINISHED" and (current_stage_mapped or stage == "GROUP_STAGE") and home_team not in ["TBD", "TBC"] and away_team not in ["TBD", "TBC"]:
-                    # Track Biggest Win (Margin and Winner's Goals)
                     score_data = match.get("score", {})
                     ft = score_data.get("fullTime", {})
                     h_g = ft.get("home", 0) or 0
@@ -244,7 +252,6 @@ def fetch_live_tournament_data(api_token):
 
                     winner = match.get("score", {}).get("winner")
                     
-                    # Progress tracking logic (only for knockout stages)
                     if current_stage_mapped and current_stage_mapped != "Group Stage":
                         next_stage = current_stage_mapped
                         if current_stage_mapped in STAGE_ORDER:
@@ -266,7 +273,6 @@ def fetch_live_tournament_data(api_token):
                             stats[champ]["Stage"] = "Champion"
                             stats[champ]["Status"] = "Winner"
 
-        # FALLBACK/PRIMARY: Fetch dedicated scorers endpoint to guarantee Golden Boot data
         scorers_url = "https://api.football-data.org/v4/competitions/WC/scorers"
         scorers_res = requests.get(scorers_url, headers=headers, timeout=10)
         if scorers_res.status_code == 200:
@@ -277,7 +283,6 @@ def fetch_live_tournament_data(api_token):
                 if g_team == "United States": g_team = "USA"
                 g_count = entry.get("goals", 0)
                 
-                # Update or add to our dictionary
                 if s_name:
                     golden_boot[s_name] = {"Scorer": s_name, "Team": g_team, "Goals": g_count}
 
@@ -286,19 +291,21 @@ def fetch_live_tournament_data(api_token):
        
     return stats, stage_matchups, all_matches, golden_boot, biggest_wins
 
+# Initialize Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def database_load_pipeline():
+def database_load_pipeline(worksheet_name):
+    """Parameterized database pipeline pointing to specific worksheets."""
     try:
-        df_p = conn.read(worksheet="Participants_Wimbledon", ttl=0)
+        df_p = conn.read(worksheet=worksheet_name, ttl=0)
         if df_p is None:
-            df_p = pd.DataFrame(columns=["Participant Name", "Team Assigned"])
+            df_p = pd.DataFrame(columns=["Participant Name", "Participant Name 2", "Team Assigned"])
     except Exception as e:
         st.sidebar.warning(f"Connection to Sheets failed: {e}")
-        df_p = pd.DataFrame(columns=["Participant Name", "Team Assigned"])
+        df_p = pd.DataFrame(columns=["Participant Name", "Participant Name 2", "Team Assigned"])
         
     if df_p.empty or "Participant Name" not in df_p.columns or "Team Assigned" not in df_p.columns:
-        df_p = pd.DataFrame(columns=["Participant Name", "Team Assigned"])
+        df_p = pd.DataFrame(columns=["Participant Name", "Participant Name 2", "Team Assigned"])
     else:
         df_p = df_p.dropna(subset=["Participant Name"])
         
@@ -308,12 +315,69 @@ def database_load_pipeline():
     
     if df_t.empty:
         df_t = pd.DataFrame(columns=["Team", "Flag", "Won", "Lost", "Points", "Goals Scored", "Stage", "Status"])
+    
+    # UNIFIED LOOKUP MAPPING ENGINE
+    team_to_player = {}
+    if not df_p.empty:
+        for _, row in df_p.iterrows():
+            team = str(row.get("Team Assigned", "")).strip().upper()
+            if not team or team in ["NAN", "NONE"]:
+                continue
+                
+            p1 = shorten_name(row.get("Participant Name", ""))
+            p2 = shorten_name(row.get("Participant Name 2", "")) if "Participant Name 2" in row else ""
+            p2 = p2.strip()
+            
+            row_players = []
+            if p1 and p1.upper() not in ["NAN", "NONE"]:
+                row_players.append(p1)
+            if p2 and p2.upper() not in ["NAN", "NONE"]:
+                row_players.append(p2)
+                
+            if not row_players:
+                continue
+                
+            combined_row_string = " / ".join(row_players)
+            
+            if team in team_to_player:
+                existing_players = [p.strip() for p in team_to_player[team].split(" / ")]
+                for player in row_players:
+                    if player not in existing_players:
+                        team_to_player[team] += f" / {player}"
+            else:
+                team_to_player[team] = combined_row_string
+
+    if not df_t.empty:
+        def get_formatted_player(team_name):
+            p_name = team_to_player.get(str(team_name).strip().upper())
+            if p_name:
+                return f"{p_name} ({team_name})"
+            return team_name
+        df_t["Player"] = df_t["Team"].apply(get_formatted_player)
+    else:
+        df_t["Player"] = []
         
-    return df_p, df_t, stage_matchups, matches_list, golden_boot, biggest_wins
+    df_boot = pd.DataFrame(list(golden_boot.values()))
+    df_wins = pd.DataFrame(biggest_wins)
+    
+    if df_wins.empty:
+        df_wins = pd.DataFrame(columns=["Match", "Score", "Margin", "Goals", "Winner"])
+    else:
+        df_wins = df_wins.sort_values(by=["Margin", "Goals"], ascending=False).reset_index(drop=True)
 
-def main():
+    if df_boot.empty:
+        df_boot = pd.DataFrame(columns=["Scorer", "Team", "Goals"])
+    else:
+        df_boot = df_boot.sort_values(by="Goals", ascending=False).reset_index(drop=True)
 
-    st_autorefresh(interval=30000, key="datarefresh")
+    return df_p, df_t, stage_matchups, matches_list, team_to_player, df_boot, df_wins
+
+# -------------------------------------------------------------
+# CORE DASHBOARD RENDERER
+# -------------------------------------------------------------
+
+def render_dashboard(worksheet_name, dashboard_title):
+    st_autorefresh(interval=30000, key=f"datarefresh_{worksheet_name}")
 
     secrets_ok, error_msg = check_secrets()
     if not secrets_ok:
@@ -321,10 +385,39 @@ def main():
         st.info(f"Details: {error_msg}")
         st.stop()
 
-    df_participants, df_teams, global_matchups, raw_matches, golden_boot, biggest_wins = database_load_pipeline()
+    df_participants, df_teams, global_matchups, raw_matches, team_to_player, df_boot, df_wins = database_load_pipeline(worksheet_name)
+
+    odds_lookup = {}
+    for m in raw_matches:
+        m_id = m.get("id")
+        h = m.get("homeTeam", {}).get("name")
+        a = m.get("awayTeam", {}).get("name")
+        if h and a:
+            o_node = m.get("odds", {}) or {}
+            odds_data = {
+                "home_win": o_node.get("homeWin"),
+                "away_win": o_node.get("awayWin"),
+                "draw": o_node.get("draw")
+            }
+            # Map both by ID and a straightforward string check
+            if m_id:
+                odds_lookup[m_id] = odds_data
+            odds_lookup[f"{h}_vs_{a}"] = odds_data
 
     st.markdown("""
         <style>
+        /* 1. Eliminate dead space at the top of the page */
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 0rem !important;
+            margin-top: 0px !important;
+        }
+        [data-testid="stHeader"] {
+            height: 0px !important;
+            background: transparent !important;
+        }
+        
+        /* 2. Responsive Horizontal scrolling for columns on mobile */
         @media (max-width: 800px) {
             div[data-testid="stHorizontalBlock"] {
                 overflow-x: auto;
@@ -337,16 +430,31 @@ def main():
                 flex: 0 0 auto !important;
             }
         }
+        
+        /* 3. Make Tabs prominent with colored backgrounds (especially on mobile) */
+        button[data-baseweb="tab"] {
+            background-color: #f1f5f9 !important; /* Light slate gray background for inactive tabs */
+            border: 1px solid #e2e8f0 !important;
+            border-radius: 8px 8px 0px 0px !important;
+            padding: 10px 16px !important;
+            margin-right: 4px !important;
+            transition: all 0.2s ease-in-out;
+        }
+        
+        /* Style for the active/selected tab */
+        button[data-baseweb="tab"][aria-selected="true"] {
+            background-color: #0284c7 !important; /* Vibrant primary blue for the active tab */
+            color: white !important;
+            font-weight: bold !important;
+            border-color: #0284c7 !important;
+        }
+
         @keyframes blinker {
             50% { opacity: 0; }
         }
         </style>
     """, unsafe_allow_html=True)
-
-    team_to_player = {}
-    if not df_participants.empty:
-        team_to_player = {str(k).strip().upper(): str(v).strip() for k, v in zip(df_participants["Team Assigned"], df_participants["Participant Name"])}
-
+    
     st.sidebar.title("🏆 Sweepstake Hub")
     with st.sidebar:
         st.markdown("### Automated Live Rules")
@@ -362,82 +470,90 @@ def main():
         app_view = st.radio("Switch Dashboard View", ["📊 Public Fan Dashboard", "🔐 Admin Control Panel"])
 
     if app_view == "📊 Public Fan Dashboard":
-        st.title("📊 The Wimbledon World Cup")
+        st.title(dashboard_title)
         st.caption("Updated automatically from official game knockout data feeds.")
         
-        tab_lead, tab_bracket, tab_feed = st.tabs([
-            "🏆 Live Leaderboard", 
-            "🌳 Knockout Bracket Tracker",
-            "📱 Feed"
+        tab_feed, tab_lead, tab_bracket = st.tabs([
+            "📱 Live Action", 
+            "🏆 Leaderboard",
+            "🌳 Draw"
         ])
         
         with tab_lead:
-            st.subheader("🏆 Global Sweepstake Leaderboard")
-            df_merged = df_participants.merge(df_teams, left_on="Team Assigned", right_on="Team", how="left")
-            df_merged["Goals Scored"] = df_merged["Goals Scored"].fillna(0).astype(int)
-            df_merged["Flag"] = df_merged["Flag"].fillna("https://flagcdn.com/w40/un.png")
-            df_merged["Stage"] = df_merged["Stage"].fillna("Group Stage")
-
-            df_display = df_merged[[
-                "Flag", "Participant Name", "Stage", "Goals Scored"
-            ]].rename(columns={
-                "Participant Name": "Player",
-                "Stage": "Current Progress Stage",
-                "Goals Scored": "Total Goals Scored"
-            })
+            st.subheader("Overall Standings")
+            df_lead = df_teams.copy()
             
-            df_display = df_display.sort_values(
-                by=["Current Progress Stage", "Total Goals Scored", "Player"], 
-                key=lambda col: col.apply(lambda val: STAGE_ORDER.index(val) if val in STAGE_ORDER else -1) if col.name == "Current Progress Stage" else col,
-                ascending=[False, False, True]
-            ).reset_index(drop=True)
+            if not df_lead.empty:
+                df_lead["Goals Scored"] = df_lead["Goals Scored"].fillna(0).astype(int)
+                df_lead["Flag"] = df_lead["Flag"].fillna("https://flagcdn.com/w40/un.png")
+                df_lead["Stage"] = df_lead["Stage"].fillna("Group Stage")
+                
+                df_display = df_lead[[
+                    "Flag", "Player", "Stage", "Goals Scored"
+                ]].rename(columns={
+                    "Stage": "Current Progress Stage",
+                    "Goals Scored": "Total Goals Scored"
+                })
+                
+                df_display = df_display.sort_values(
+                    by=["Current Progress Stage", "Total Goals Scored", "Player"], 
+                    key=lambda col: col.apply(lambda val: STAGE_ORDER.index(val) if val in STAGE_ORDER else -1) if col.name == "Current Progress Stage" else col,
+                    ascending=[False, False, True]
+                ).reset_index(drop=True)
 
-            st.dataframe(
-                df_display, 
-                use_container_width=True, 
-                height=450,
-                column_config={"Flag": st.column_config.ImageColumn("🏳️", width="small")},
-                hide_index=True
-            )
+                st.dataframe(
+                    df_display, 
+                    use_container_width=True, 
+                    height=450,
+                    column_config={"Flag": st.column_config.ImageColumn("🏳️", width="small")},
+                    hide_index=True
+                )
+            else:
+                st.info("No standings data available yet.")
             
             st.divider()
             col_a, col_b = st.columns(2)
             
-            # Add this right before the Golden Boot section
-            df_boot = pd.DataFrame(list(golden_boot.values())) if golden_boot else pd.DataFrame(columns=["Scorer", "Team", "Goals"])
-            df_wins = pd.DataFrame(biggest_wins) if biggest_wins else pd.DataFrame(columns=["Winner", "Match", "Score"])
-
+            def get_owner_formatted(team_name):
+                player = team_to_player.get(str(team_name).strip().upper())
+                if player:
+                    return f"{player} ({team_name})"
+                return ""
 
             with col_a:
                 st.subheader("⚽ Golden Boot")
-                # Map the sweepstake owner to the scorer's team
-                df_boot["Owner"] = df_boot["Team"].apply(lambda x: team_to_player.get(str(x).strip().upper(), ""))
-                st.dataframe(df_boot[["Scorer", "Team", "Owner", "Goals"]].head(10), use_container_width=True, hide_index=True)
+                if not df_boot.empty:
+                    df_boot["Owner"] = df_boot["Team"].apply(get_owner_formatted)
+                    st.dataframe(df_boot[["Scorer", "Team", "Owner", "Goals"]].head(10), use_container_width=True, hide_index=True)
+                else:
+                    st.write("Data currently unavailable.")
                     
             with col_b:
                 st.subheader("🔥 Biggest Win")
-                df_wins["Owner"] = df_wins["Winner"].apply(lambda x: team_to_player.get(str(x).strip().upper(), ""))
-                st.dataframe(
-                    df_wins[["Winner", "Match", "Score", "Owner"]].head(5), 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={"Owner": "Sweepstake Owner"}
-                )
+                if not df_wins.empty:
+                    df_wins["Owner"] = df_wins["Winner"].apply(get_owner_formatted)
+                    st.dataframe(
+                        df_wins[["Winner", "Match", "Score", "Owner"]].head(5), 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={"Owner": "Sweepstake Owner"}
+                    )
+                else:
+                    st.write("Data currently unavailable.")
 
-            # --- START OF TOURNAMENT MILESTONES SECTION ---
+            # --- TOURNAMENT MILESTONES ---
             st.divider()
             st.subheader("🏆 Tournament Milestone Bounties")
             st.caption("Special sweepstake milestones achieved during the tournament (determined chronologically by non-simultaneous match order).")
 
-            # Custom card rendering utility supporting a white theme and image-based flag graphics
             def render_milestone_card(title, team_name, metric_detail):
                 team_key = str(team_name).strip().upper()
                 entrant = team_to_player.get(team_key, "Unassigned")
+                if entrant != "Unassigned":
+                    entrant = f"{entrant} ({team_name})"
                 
-                # Dynamic fallback if a crest image cannot be loaded
                 flag_html = "🏳️" 
                 
-                # Extract the high-res crest URL from the live dataframe to circumvent OS emoji rendering limitations
                 if not df_teams.empty:
                     flag_match = df_teams[df_teams["Team"].str.upper() == team_key]
                     if not flag_match.empty and "Flag" in flag_match.columns:
@@ -461,42 +577,20 @@ def main():
                     unsafe_allow_html=True
                 )
 
-            # Establish responsive 2-column layout grids
             col_m1, col_m2 = st.columns(2)
 
             with col_m1:
-                render_milestone_card(
-                    title="🎯 First Goal from a Penalty",
-                    team_name="Switzerland",
-                    metric_detail="Successfully converted against Qatar."
-                )
-                
-                render_milestone_card(
-                    title="🤦‍♂️ First Own Goal",
-                    team_name="Paraguay",
-                    metric_detail="Deflected into their own net against USA."
-                )
+                render_milestone_card("🎯 First Goal from a Penalty", "Switzerland", "Successfully converted against Qatar.")
+                render_milestone_card("🤦‍♂️ First Own Goal", "Paraguay", "Deflected into their own net against USA.")
 
             with col_m2:
-                render_milestone_card(
-                    title="🟥 First Red Card",
-                    team_name="South Africa",
-                    metric_detail="Sent off during the tournament opener sequence."
-                )
-                
-                render_milestone_card(
-                    title="📉 Worst Team (Exited in Group Stage)",
-                    team_name="Iraq",
-                    metric_detail="Eliminated with 0 Points and a -11 Goal Difference."
-                )
-            # --- END OF TOURNAMENT MILESTONES SECTION ---
+                render_milestone_card("🟥 First Red Card", "South Africa", "Sent off during the tournament opener sequence.")
+                render_milestone_card("📉 Worst Team (Exited in Group Stage)", "Iraq", "Eliminated with 0 Points and a -11 Goal Difference.")
 
             st.divider()
             st.subheader("🚩 Most Corners")
             st.info("Corner kick statistics are not provided by the current tournament data provider (football-data.org).")
 
-            st.space()
-            st.space()
             st.space()
             st.caption("Created By Devansh Gupta using Gemini")
                 
@@ -520,13 +614,12 @@ def main():
                     return "<div style='display: flex; justify-content: space-between; align-items: center; white-space: nowrap;'><span style='color:gray; font-style:italic;'>🏳️ TBD</span></div>"
                 
                 match_row = df_teams[df_teams["Team"] == team_name]
-                player_name = team_to_player.get(str(team_name).upper())
-                display_name = player_name if player_name else team_name
-                
                 if match_row.empty:
-                    return f"<div style='display: flex; justify-content: space-between; align-items: center; white-space: nowrap;'><span>🏳️ {display_name}</span></div>"
+                    return f"<div style='display: flex; justify-content: space-between; align-items: center; white-space: nowrap;'><span>🏳️ {team_name}</span></div>"
                 
                 row = match_row.iloc[0]
+                display_name = row.get("Player", team_name)
+                
                 flag_html = f"<img src='{row['Flag']}' width='20' style='vertical-align: middle; margin-right: 5px; flex-shrink: 0;'>"
                 
                 match_scores = row.get("Match Scores", {})
@@ -541,76 +634,56 @@ def main():
                 if score is not None:
                     score_html = f"<span style='font-size: 18px; font-weight: bold; margin-left: 8px; flex-shrink: 0;'>{score}</span>"
                 elif team_name != "TBD" and opponent_name and opponent_name != "TBD":
-                    opp_row = df_teams[df_teams["Team"] == opponent_name]
-                    if not opp_row.empty:
-                        team_goals = row["Goals Scored"]
-                        opp_goals = opp_row.iloc[0]["Goals Scored"]
-                        win_prob = (team_goals + 1) / (team_goals + opp_goals + 2)
-                        score_html = f"<span style='font-size: 11px; color: #888; margin-left: 8px; font-style: italic;' title='Win probability based on total goals scored'>{win_prob:.0%}</span>"
+                    # Try lookups in both potential fixture configurations
+                    match_odds = odds_lookup.get(f"{team_name}_vs_{opponent_name}") or odds_lookup.get(f"{opponent_name}_vs_{team_name}") or {}
+                    
+                    # Verify if team is playing at home or away in this fixture mapping
+                    if odds_lookup.get(f"{team_name}_vs_{opponent_name}"):
+                        team_odd = match_odds.get("home_win")
+                    else:
+                        team_odd = match_odds.get("away_win")
+                    
+                    if team_odd is not None and team_odd > 0:
+                        score_html = f"<span style='font-size: 12px; color: #0284c7; font-weight: bold; margin-left: 8px;' title='API Pre-Match Decimal Odds'>{team_odd:.2f}</span>"
+                    else:
+                        score_html = f"<span style='font-size: 11px; color: #888; margin-left: 8px; font-style: italic;'>--</span>"
+
 
                 if row["Status"] == "Knocked Out" and row["Stage"] == current_stage_title:
                     return f"<div style='display: flex; justify-content: space-between; align-items: center; white-space: nowrap; width: 100%;'><div style='display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis;'>{flag_html}<span style='color:gray; text-decoration:line-through;'>{display_name}</span><span style='font-size:11px; color:red; margin-left:3px;'>❌</span></div>{score_html}</div>"
                 else:
                     return f"<div style='display: flex; justify-content: space-between; align-items: center; white-space: nowrap; width: 100%;'><div style='display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis;'>{flag_html}<span style='font-weight: bold;'>{display_name}</span>{live_badge}{trophy_suffix}</div>{score_html}</div>"
 
-            def get_match_winner(t_a, t_b, stage_name):
-                if t_a in ["TBD", "TBC"] or t_b in ["TBD", "TBC"]:
-                    return "TBD"
-                
-                row_a = df_teams[df_teams["Team"] == t_a]
-                row_b = df_teams[df_teams["Team"] == t_b]
-                
-                if not row_a.empty and row_a.iloc[0]["Status"] == "Knocked Out" and row_a.iloc[0]["Stage"] == stage_name:
-                    return t_b
-                if not row_b.empty and row_b.iloc[0]["Status"] == "Knocked Out" and row_b.iloc[0]["Stage"] == stage_name:
-                    return t_a
-                    
-                if not row_a.empty and not row_b.empty:
-                    s_a = row_a.iloc[0].get("Match Scores", {}).get(stage_name)
-                    s_b = row_b.iloc[0].get("Match Scores", {}).get(stage_name)
-                    if s_a is not None and s_b is not None:
-                        if s_a > s_b: return t_a
-                        if s_b > s_a: return t_b
-                
-                return "TBD"
-
-            # 1. Initialize all stages with empty structural TBD slots
             ordered_bracket = {}
             for stage in bracket_stages:
                 slots = stage_geometry[stage]["total_slots"]
                 ordered_bracket[stage] = [("TBD", "TBD") for _ in range(slots)]
 
-            # 2. Populate Round of 32 first (base level) from the raw API matchups
             r32_raw = global_matchups.get("Round of 32", [])
             for idx, pair in enumerate(r32_raw):
                 if idx < len(ordered_bracket["Round of 32"]):
                     ordered_bracket["Round of 32"][idx] = pair
 
-            # 3. Mathematically anchor advanced matches (R16, QF, SF, Finals) into their correct parent paths
             for stage_idx in range(1, len(bracket_stages)):
                 current_stage = bracket_stages[stage_idx]
                 prev_stage = bracket_stages[stage_idx - 1]
                 raw_matches_this_stage = global_matchups.get(current_stage, [])
 
                 for t_a, t_b in raw_matches_this_stage:
-                    # Determine the correct slot index by checking where either team came from in the previous round
                     target_slot_idx = None
                     for prev_slot_idx, (p1, p2) in enumerate(ordered_bracket[prev_stage]):
                         if (t_a != "TBD" and t_a in [p1, p2]) or (t_b != "TBD" and t_b in [p1, p2]):
                             target_slot_idx = prev_slot_idx // 2
                             break
                     
-                    # If found, place them in their structurally aligned row
                     if target_slot_idx is not None and target_slot_idx < len(ordered_bracket[current_stage]):
                         ordered_bracket[current_stage][target_slot_idx] = (t_a, t_b)
                     else:
-                        # Fallback: place in the first available slot if parent context is missing
                         for idx in range(len(ordered_bracket[current_stage])):
                             if ordered_bracket[current_stage][idx] == ("TBD", "TBD"):
                                 ordered_bracket[current_stage][idx] = (t_a, t_b)
                                 break
 
-            # 4. Fallback Verification Check: Verify advanced team presence exactly ONCE per stage
             if not df_teams.empty:
                 for _, row in df_teams.iterrows():
                     team_name = row["Team"]
@@ -619,7 +692,6 @@ def main():
                         continue
              
                     if team_stage in ordered_bracket:
-                        # Scan the ENTIRE bracket across all stages for this team name to prevent duplicates
                         already_visible = False
                         for stg in bracket_stages:
                             if any((team_name == t1 or team_name == t2) for t1, t2 in ordered_bracket.get(stg, [])):
@@ -637,13 +709,11 @@ def main():
                                     for prev_slot_idx, (p1, p2) in enumerate(ordered_bracket[prev_stage]):
                                         if p1 == team_name or p2 == team_name:
                                             target_slot_idx = prev_slot_idx // 2
-                                            # Even index maps to top slot line, Odd index maps to bottom slot line
                                             is_bottom_position = (prev_slot_idx % 2 != 0)
                                             break
                             except ValueError:
                                 pass
                             
-                            # Place them into their exact structurally aligned row and line position
                             if target_slot_idx is not None and target_slot_idx < len(ordered_bracket[team_stage]):
                                 t1, t2 = ordered_bracket[team_stage][target_slot_idx]
                                 if is_bottom_position:
@@ -651,7 +721,6 @@ def main():
                                 else:
                                     ordered_bracket[team_stage][target_slot_idx] = (team_name, t2)
                             else:
-                                # Safe fallback to first empty slot if previous round context is completely missing
                                 for idx in range(len(ordered_bracket[team_stage])):
                                     t1, t2 = ordered_bracket[team_stage][idx]
                                     if t1 in ["TBD", "TBC"]:
@@ -661,7 +730,6 @@ def main():
                                         ordered_bracket[team_stage][idx] = (t1, team_name)
                                         break
 
-            # Render columns using layout configurations
             for col_idx, stage_title in enumerate(bracket_stages):
                 with grid_cols[col_idx]:
                     st.markdown(f"⚡ **{stage_title}**")
@@ -688,25 +756,19 @@ def main():
                             st.html(f"<div style='height: {mid_height_px}px;'></div>")
 
             st.space()
-            st.space()
-            st.space()
             st.caption("Created By Devansh Gupta using Gemini")
 
         with tab_feed:
-            # --- BST Night Logic Processing Block (4PM to 6AM Window) ---
             now_utc = datetime.utcnow()
             now_bst = now_utc + timedelta(hours=1)
             
-            # Day cycle refreshes exactly at 6:00 AM BST
             if now_bst.hour >= 6:
                 target_date = now_bst.date()
             else:
                 target_date = now_bst.date() - timedelta(days=1)
             
             def get_night_matches(target_d):
-                # Window starts at 4:00 PM (16:00) on the target date
                 start_window = datetime.combine(target_d, datetime.min.time()).replace(hour=16)
-                # 4:00 PM to 6:00 AM next day is exactly 14 hours
                 end_window = start_window + timedelta(hours=14)
                 
                 matches = []
@@ -736,8 +798,8 @@ def main():
                 for m, m_time in feed_matches:
                     h_team = m["homeTeam"]["name"]
                     a_team = m["awayTeam"]["name"]
-                    h_player = team_to_player.get(h_team.upper(), h_team)
-                    a_player = team_to_player.get(a_team.upper(), a_team)
+                    h_player = df_teams[df_teams["Team"] == h_team]["Player"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == h_team].empty else h_team
+                    a_player = df_teams[df_teams["Team"] == a_team]["Player"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == a_team].empty else a_team
                     
                     h_flag = df_teams[df_teams["Team"] == h_team]["Flag"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == h_team].empty else "https://flagcdn.com/w40/un.png"
                     a_flag = df_teams[df_teams["Team"] == a_team]["Flag"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == a_team].empty else "https://flagcdn.com/w40/un.png"
@@ -765,8 +827,8 @@ def main():
                 for m, m_time in tonight_matches:
                     h_team = m["homeTeam"]["name"]
                     a_team = m["awayTeam"]["name"]
-                    h_player = team_to_player.get(h_team.upper(), h_team)
-                    a_player = team_to_player.get(a_team.upper(), a_team)
+                    h_player = df_teams[df_teams["Team"] == h_team]["Player"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == h_team].empty else h_team
+                    a_player = df_teams[df_teams["Team"] == a_team]["Player"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == a_team].empty else a_team
                     
                     h_flag = df_teams[df_teams["Team"] == h_team]["Flag"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == h_team].empty else "https://flagcdn.com/w40/un.png"
                     a_flag = df_teams[df_teams["Team"] == a_team]["Flag"].values[0] if not df_teams.empty and not df_teams[df_teams["Team"] == a_team].empty else "https://flagcdn.com/w40/un.png"
@@ -790,7 +852,6 @@ def main():
                     elif m["status"] in ["IN_PLAY", "PAUSED", "LIVE"]:
                         score_str = f"{m['score']['fullTime'].get('home', 0)} - {m['score']['fullTime'].get('away', 0)}"
                         
-                        # Calculate live win probabilities based on tournament historical goals
                         h_goals = df_teams[df_teams["Team"] == h_team]["Goals Scored"].sum() if not df_teams.empty else 0
                         a_goals = df_teams[df_teams["Team"] == a_team]["Goals Scored"].sum() if not df_teams.empty else 0
                         total_w = h_goals + a_goals + 2
@@ -806,17 +867,22 @@ def main():
                         st.caption(f"📊 Live Prediction: {h_player} {h_prob:.0%} chance | {a_player} {a_prob:.0%} chance")
                         
                     else:
-                        h_goals = df_teams[df_teams["Team"] == h_team]["Goals Scored"].sum() if not df_teams.empty else 0
-                        a_goals = df_teams[df_teams["Team"] == a_team]["Goals Scored"].sum() if not df_teams.empty else 0
-                        total_w = h_goals + a_goals + 2
-    
-                        h_prob = (h_goals + 1) / total_w
-                        a_prob = (a_goals + 1) / total_w
+                        match_odds = odds_lookup.get(m.get("id")) or odds_lookup.get(f"{h_team}_vs_{a_team}") or {}
+                        h_odd = match_odds.get("home_win")
+                        a_odd = match_odds.get("away_win")
+                        draw_odd = match_odds.get("draw")
+                        
+                        if h_odd and a_odd:
+                            odds_display = f"Odds — Home: **{h_odd:.2f}** | Draw: **{draw_odd:.2f}** | Away: **{a_odd:.2f}**"
+                        else:
+                            odds_display = "Odds pending fixture finalization"
                         
                         st.markdown(
-                            f"<img src='{h_flag}' width='20' style='vertical-align: middle; margin-right: 6px;'>**{h_player}** `{h_prob:.0%}` &nbsp; vs &nbsp; `{a_prob:.0%}` **{a_player}**<img src='{a_flag}' width='20' style='vertical-align: middle; margin-left: 6px;'>", 
+                            f"<img src='{h_flag}' width='20' style='vertical-align: middle; margin-right: 6px;'>**{h_player}** &nbsp; vs &nbsp; **{a_player}**<img src='{a_flag}' width='20' style='vertical-align: middle; margin-left: 6px;'>", 
                             unsafe_allow_html=True
                         )
+                        st.markdown(f"<small style='color: #64748b; display: block; margin-top: -5px; margin-bottom: 5px;'>📊 {odds_display}</small>", unsafe_allow_html=True)
+
                         if m_time:
                             st.caption(f"Kickoff: {m_time.strftime('%H:%M')} (BST)")
                         
@@ -825,12 +891,10 @@ def main():
                         if preview:
                              st.write(preview)
             st.space()
-            st.space()
-            st.space()
             st.caption("Created By Devansh Gupta using Gemini")
 
     # -------------------------------------------------------------
-    # PANEL 2: PASSWORD PROTECTED ADMIN PANEL
+    # ADMIN PANEL
     # -------------------------------------------------------------
     elif app_view == "🔐 Admin Control Panel":
         st.title("🔐 Admin Controller Dashboard")
@@ -862,18 +926,22 @@ def main():
             adm_t1, adm_t2 = st.tabs(["👤 Participant Assignment Engine", "⚠️ Database Reset Switch"])
         
             with adm_t1:
-                st.subheader("📝 Live Participant Registry Editor")
+                st.subheader(f"📝 Live Participant Registry Editor ({worksheet_name})")
                 available_teams = sorted(df_teams["Team"].dropna().astype(str).tolist()) if not df_teams.empty else []
           
+                if "Participant Name 2" not in df_participants.columns:
+                    df_participants["Participant Name 2"] = ""
+
                 edited_p_df = st.data_editor(
                     df_participants,
                     num_rows="dynamic",
                     use_container_width=True,
                     column_config={
-                        "Participant Name": st.column_config.TextColumn("Player Name", required=True),
+                        "Participant Name": st.column_config.TextColumn("Player 1 Name", required=True),
+                        "Participant Name 2": st.column_config.TextColumn("Player 2 Name", required=False),
                         "Team Assigned": st.column_config.SelectboxColumn("Assigned Country", options=available_teams, required=True)
                     },
-                    key="participant_grid_editor"
+                    key=f"participant_grid_editor_{worksheet_name}"
                 )
 
                 if st.button("💾 Save Participant Grid Changes", type="primary"):
@@ -881,7 +949,7 @@ def main():
                         with st.spinner("Synchronizing database registry..."):
                             edited_p_df["Participant Name"] = edited_p_df["Participant Name"].astype(str).str.strip()
                             edited_p_df = edited_p_df.dropna(subset=["Participant Name"])
-                            conn.update(worksheet="Participants_Wimbledon", data=edited_p_df)
+                            conn.update(worksheet=worksheet_name, data=edited_p_df)
                             st.cache_data.clear()
                             st.success("🎉 Participant registry updated successfully!")
                             st.rerun()
@@ -890,17 +958,40 @@ def main():
                         
             with adm_t2:
                 st.subheader("Destructive Matrix Synchronization Block")
-                st.warning("Clears user-registry rows completely.")
+                st.warning(f"Clears user-registry rows completely from {worksheet_name}.")
                 safety_checkbox = st.checkbox("I explicitly acknowledge that this operational process cannot be undone.")
                 if st.button("Wipe & Clear Global Datastores", disabled=not safety_checkbox):
-                    blank_p = pd.DataFrame(columns=["Participant Name", "Team Assigned"])
+                    blank_p = pd.DataFrame(columns=["Participant Name", "Participant Name 2", "Team Assigned"])
                     try:
-                        conn.update(worksheet="Participants_Wimbledon", data=blank_p)
+                        conn.update(worksheet=worksheet_name, data=blank_p)
                         st.cache_data.clear()
                         st.success("Google Spreadsheet cleared successfully!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Execution failed: {e}")
 
+
+# -------------------------------------------------------------
+# STREAMLIT PAGE ROUTING ENGINE
+# -------------------------------------------------------------
+
+def page_wimbledon():
+    render_dashboard(
+        worksheet_name="Participants_Wimbledon", 
+        dashboard_title="📊 The Wimbledon World Cup"
+    )
+
+def page_office():
+    render_dashboard(
+        worksheet_name="Participants_NB", 
+        dashboard_title="📊 The World Cup Sweepstake"
+    )
+
+# Use Streamlit's native navigation to create specific URL endpoints
+pg = st.navigation([
+    st.Page(page_wimbledon, title="Wimbledon Hub", icon="🎾", url_path="wimbledon"),
+    st.Page(page_office, title="Office Hub", icon="🏢", url_path="office")
+], position="hidden")
+
 if __name__ == "__main__":
-    main()
+    pg.run()
