@@ -48,7 +48,7 @@ def check_secrets():
 # AI CORE UTILITIES (GROQ)
 # -------------------------------------------------------------
 
-@st.cache_data(persist="disk", show_spinner=False)
+@st.cache_data(ttl=1800, persist="disk", show_spinner=False)
 def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
     """Generates post-match summary exactly ONCE per unique match data signature."""
     groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
@@ -92,7 +92,7 @@ def get_gemini_summary(match_id, h_player, a_player, score_str, goal_info):
     except Exception:
         return "What an incredible finish to this matchup!"
 
-@st.cache_data(persist="disk", show_spinner=False)
+@st.cache_data(ttl=1800, persist="disk", show_spinner=False)
 def get_gemini_preview(match_id, h_player, a_player, h_prob, a_prob):
     """Generates upcoming match preview narrative exactly ONCE per match ID."""
     groq_api_key = st.secrets.get("groq_api", {}).get("groq_api_key")
