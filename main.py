@@ -877,6 +877,14 @@ def render_dashboard(worksheet_name, dashboard_title):
                         else:
                             odds_display = "Odds pending fixture finalization"
                         
+                        # Win probabilities (needed for the AI preview below), derived from
+                        # tournament goals scored so far — same logic as the LIVE branch.
+                        h_goals = df_teams[df_teams["Team"] == h_team]["Goals Scored"].sum() if not df_teams.empty else 0
+                        a_goals = df_teams[df_teams["Team"] == a_team]["Goals Scored"].sum() if not df_teams.empty else 0
+                        total_w = h_goals + a_goals + 2
+                        h_prob = (h_goals + 1) / total_w
+                        a_prob = (a_goals + 1) / total_w
+                        
                         st.markdown(
                             f"<img src='{h_flag}' width='20' style='vertical-align: middle; margin-right: 6px;'>**{h_player}** &nbsp; vs &nbsp; **{a_player}**<img src='{a_flag}' width='20' style='vertical-align: middle; margin-left: 6px;'>", 
                             unsafe_allow_html=True
